@@ -36,11 +36,24 @@
             border-radius: 8px;
             overflow: hidden;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.5);
+            position: relative;
+            padding-bottom: 56.25%; /* 16:9 aspect ratio */
+            height: 0;
+        }
+        .video-wrapper iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
         }
         .video-js {
+            position: absolute;
+            top: 0;
+            left: 0;
             width: 100%;
-            height: auto;
-            max-height: 80vh;
+            height: 100%;
         }
         .controls {
             margin-top: 20px;
@@ -66,6 +79,13 @@
         .download-btn:hover {
             background-color: #218838;
         }
+        .warning {
+            background-color: #ff6b6b;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
         .test-selector {
             margin-bottom: 20px;
             padding: 15px;
@@ -86,6 +106,28 @@
             font-size: 12px;
             color: #888;
         }
+        .upload-section {
+            margin: 20px 0;
+            padding: 20px;
+            background-color: #2a2a2a;
+            border-radius: 8px;
+            border: 2px dashed #444;
+            text-align: center;
+        }
+        #file-input {
+            display: none;
+        }
+        .upload-label {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #0066cc;
+            color: white;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .upload-label:hover {
+            background-color: #0052a3;
+        }
     </style>
 </head>
 <body>
@@ -97,9 +139,15 @@
             <select id="test-select" onchange="loadTest()">
                 <option value="">Choose a test...</option>
                 <!-- Add your tests here -->
-                <option value='{"id":"test001","name":"Image Generation Test 001","url":"YOUR_GOOGLE_DRIVE_DIRECT_URL","date":"2025-06-07","tool":"Stable Diffusion"}'>Image Generation Test 001</option>
-                <option value='{"id":"test002","name":"Video Upscaling Test 001","url":"YOUR_GOOGLE_DRIVE_DIRECT_URL_2","date":"2025-06-07","tool":"Topaz"}'>Video Upscaling Test 001</option>
+                <option value='{"id":"test001","name":"Image Generation Test 001","url":"YOUR_GOOGLE_DRIVE_URL","date":"2025-06-07","tool":"Stable Diffusion"}'>Image Generation Test 001</option>
+                <option value='{"id":"test002","name":"Video Upscaling Test 001","url":"YOUR_GOOGLE_DRIVE_URL_2","date":"2025-06-07","tool":"Topaz"}'>Video Upscaling Test 001</option>
             </select>
+        </div>
+
+        <div class="upload-section">
+            <p>Or play a local file:</p>
+            <label for="file-input" class="upload-label">Choose Local Video File</label>
+            <input type="file" id="file-input" accept="video/*" onchange="loadLocalFile(event)">
         </div>
         
         <div class="info" id="test-info" style="display: none;">
@@ -107,13 +155,17 @@
             <p><strong>Date:</strong> <span id="info-date">-</span></p>
             <p><strong>Tool:</strong> <span id="info-tool">-</span></p>
             <p><strong>Status:</strong> <span id="info-status">Ready</span></p>
-            <p class="quality-info">Tips: Use fullscreen for best quality. Press 'Q' for quality stats.</p>
+            <p class="quality-info">Tips: For Google Drive videos, use the download button for highest quality. For best streaming, use CloudFlare Stream or BunnyCDN.</p>
+        </div>
+
+        <div id="drive-warning" class="warning" style="display: none;">
+            ⚠️ Google Drive detected: Playback quality may be limited. For production use, consider CloudFlare Stream or Frame.io.
         </div>
         
-        <div class="video-wrapper">
+        <div class="video-wrapper" id="video-container">
             <video
                 id="vfx-video"
-                class="video-js vjs-default-skin vjs-big-play-centered vjs-16-9"
+                class="video-js vjs-default-skin vjs-big-play-centered"
                 controls
                 preload="auto"
                 data-setup='{}'>
@@ -129,7 +181,6 @@
             <button onclick="player.playbackRate(0.5)">0.5x</button>
             <button onclick="player.playbackRate(1)">1x</button>
             <button onclick="player.playbackRate(2)">2x</button>
-            <button onclick="toggleStats()">Toggle Stats</button>
             <button onclick="captureFrame()">Capture Frame</button>
             <button class="download-btn" onclick="downloadVideo()">Download Original</button>
         </div>
@@ -139,6 +190,7 @@
     <script>
         let player;
         let currentTest = {};
+        let currentDownloadUrl = '';
         
         // Initialize player
         player = videojs('vfx-video', {
@@ -153,19 +205,8 @@
             }
         });
         
-        // Add keyboard shortcuts
-        player.ready(() => {
-            player.on('keydown', (e) => {
-                if (e.which === 81) { // Q key
-                    toggleStats();
-                }
-            });
-        });
-        
-        // Function to convert Google Drive URL to direct download URL
-        function getDirectUrl(driveUrl) {
-            // Extract file ID from various Google Drive URL formats
-            let fileId;
+        // Function to extract Google Drive file ID
+        function extractDriveFileId(url) {
             const patterns = [
                 /\/d\/([a-zA-Z0-9-_]+)/,
                 /id=([a-zA-Z0-9-_]+)/,
@@ -173,112 +214,161 @@
             ];
             
             for (let pattern of patterns) {
-                const match = driveUrl.match(pattern);
+                const match = url.match(pattern);
                 if (match) {
-                    fileId = match[1];
-                    break;
+                    return match[1];
                 }
             }
-            
-            if (fileId) {
-                return `https://drive.google.com/uc?export=download&id=${fileId}`;
-            }
-            return driveUrl; // Return original if not a Drive URL
+            return null;
         }
         
-        // Load test from URL parameters
-        function loadFromUrl() {
-            const urlParams = new URLSearchParams(window.location.search);
-            const testId = urlParams.get('id');
-            const testUrl = urlParams.get('url');
-            const testName = urlParams.get('name') || 'VFX Test';
+        // Check if URL is from Google Drive
+        function isGoogleDriveUrl(url) {
+            return url.includes('drive.google.com') || url.includes('docs.google.com');
+        }
+        
+        // Load video based on source
+        function loadVideoSource(url, name, metadata = {}) {
+            currentTest = metadata;
+            document.getElementById('test-title').textContent = name;
+            document.getElementById('test-info').style.display = 'block';
+            document.getElementById('controls').style.display = 'flex';
             
-            if (testUrl) {
-                const directUrl = getDirectUrl(testUrl);
-                loadVideo(directUrl, testName, testId);
+            if (metadata.id) document.getElementById('info-id').textContent = metadata.id;
+            if (metadata.date) document.getElementById('info-date').textContent = metadata.date;
+            if (metadata.tool) document.getElementById('info-tool').textContent = metadata.tool;
+            
+            if (isGoogleDriveUrl(url)) {
+                // Show warning for Google Drive
+                document.getElementById('drive-warning').style.display = 'block';
+                
+                const fileId = extractDriveFileId(url);
+                if (fileId) {
+                    // Use iframe for Google Drive
+                    const container = document.getElementById('video-container');
+                    container.innerHTML = `
+                        <iframe 
+                            src="https://drive.google.com/file/d/${fileId}/preview" 
+                            width="100%" 
+                            height="100%" 
+                            allow="autoplay"
+                            allowfullscreen>
+                        </iframe>
+                    `;
+                    
+                    // Store download URL
+                    currentDownloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+                    
+                    // Disable video.js controls since we're using iframe
+                    const controls = document.querySelectorAll('#controls button:not(.download-btn)');
+                    controls.forEach(btn => btn.disabled = true);
+                }
+            } else {
+                // Hide warning for non-Google Drive URLs
+                document.getElementById('drive-warning').style.display = 'none';
+                
+                // Reset to video player for direct URLs
+                const container = document.getElementById('video-container');
+                container.innerHTML = `
+                    <video
+                        id="vfx-video"
+                        class="video-js vjs-default-skin vjs-big-play-centered"
+                        controls
+                        preload="auto">
+                    </video>
+                `;
+                
+                // Reinitialize player
+                player = videojs('vfx-video', {
+                    controls: true,
+                    fluid: true,
+                    playbackRates: [0.25, 0.5, 1, 1.5, 2]
+                });
+                
+                // Load the video
+                player.src({
+                    type: 'video/mp4',
+                    src: url
+                });
+                
+                currentDownloadUrl = url;
+                
+                // Enable all controls
+                const controls = document.querySelectorAll('#controls button');
+                controls.forEach(btn => btn.disabled = false);
             }
         }
         
-        // Load selected test
+        // Load test from dropdown
         function loadTest() {
             const select = document.getElementById('test-select');
             if (select.value) {
                 const testData = JSON.parse(select.value);
-                currentTest = testData;
-                const directUrl = getDirectUrl(testData.url);
-                
-                // Update info
-                document.getElementById('test-title').textContent = testData.name;
-                document.getElementById('info-id').textContent = testData.id;
-                document.getElementById('info-date').textContent = testData.date;
-                document.getElementById('info-tool').textContent = testData.tool;
-                document.getElementById('test-info').style.display = 'block';
-                document.getElementById('controls').style.display = 'flex';
-                
-                // Load video
-                player.src({
-                    type: 'video/mp4',
-                    src: directUrl
+                loadVideoSource(testData.url, testData.name, testData);
+            }
+        }
+        
+        // Load local file
+        function loadLocalFile(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const url = URL.createObjectURL(file);
+                loadVideoSource(url, file.name, {
+                    id: 'local',
+                    date: new Date().toISOString().split('T')[0],
+                    tool: 'Local File'
                 });
             }
         }
         
-        // Load video function
-        function loadVideo(url, name, id) {
-            document.getElementById('test-title').textContent = name;
-            if (id) {
-                document.getElementById('info-id').textContent = id;
-            }
-            document.getElementById('test-info').style.display = 'block';
-            document.getElementById('controls').style.display = 'flex';
+        // Load from URL parameters
+        function loadFromUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const testUrl = urlParams.get('url');
+            const testName = urlParams.get('name') || 'VFX Test';
+            const testId = urlParams.get('id');
             
-            player.src({
-                type: 'video/mp4',
-                src: url
-            });
-        }
-        
-        // Toggle quality statistics
-        let statsVisible = false;
-        function toggleStats() {
-            if (!statsVisible) {
-                player.qualityLevels();
-                // You can add more detailed stats here
-                player.overlay({
-                    content: 'Quality Stats Enabled',
-                    start: 'playing',
-                    end: 'playing+2'
+            if (testUrl) {
+                loadVideoSource(testUrl, testName, {
+                    id: testId || 'url-param',
+                    date: new Date().toISOString().split('T')[0],
+                    tool: 'Direct URL'
                 });
             }
-            statsVisible = !statsVisible;
         }
         
-        // Capture current frame
+        // Capture current frame (only works for non-iframe videos)
         function captureFrame() {
-            const video = player.el().querySelector('video');
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0);
-            
-            // Download captured frame
-            canvas.toBlob((blob) => {
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `frame_${currentTest.id || 'capture'}_${Date.now()}.png`;
-                a.click();
-                URL.revokeObjectURL(url);
-            });
+            if (player && player.el) {
+                const video = player.el().querySelector('video');
+                if (video) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(video, 0, 0);
+                    
+                    canvas.toBlob((blob) => {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `frame_${currentTest.id || 'capture'}_${Date.now()}.png`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                    });
+                } else {
+                    alert('Frame capture not available for Google Drive videos. Please download the video first.');
+                }
+            }
         }
         
-        // Download original video
+        // Download video
         function downloadVideo() {
-            if (player.currentSrc()) {
+            if (currentDownloadUrl) {
                 const a = document.createElement('a');
-                a.href = player.currentSrc();
+                a.href = currentDownloadUrl;
                 a.download = currentTest.name || 'vfx_test.mp4';
+                a.target = '_blank';
                 a.click();
             }
         }

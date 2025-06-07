@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VFX Test Player</title>
+    <link href="https://vjs.zencdn.net/7.20.3/video-js.css" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+        }
+        .container {
+            max-width: 1920px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        .info {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #2a2a2a;
+            border-radius: 8px;
+        }
+        .info p {
+            margin: 5px 0;
+            font-size: 14px;
+        }
+        .video-wrapper {
+            background-color: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.5);
+        }
+        .video-js {
+            width: 100%;
+            height: auto;
+            max-height: 80vh;
+        }
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background-color: #0052a3;
+        }
+        .download-btn {
+            background-color: #28a745;
+        }
+        .download-btn:hover {
+            background-color: #218838;
+        }
+        .test-selector {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #2a2a2a;
+            border-radius: 8px;
+        }
+        select {
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+            background-color: #1a1a1a;
+            color: white;
+            border: 1px solid #444;
+            border-radius: 5px;
+        }
+        .quality-info {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #888;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 id="test-title">VFX Test Player</h1>
+        
+        <div class="test-selector">
+            <label for="test-select">Select Test:</label>
+            <select id="test-select" onchange="loadTest()">
+                <option value="">Choose a test...</option>
+                <!-- Add your tests here -->
+                <option value='{"id":"test001","name":"Image Generation Test 001","url":"YOUR_GOOGLE_DRIVE_DIRECT_URL","date":"2025-06-07","tool":"Stable Diffusion"}'>Image Generation Test 001</option>
+                <option value='{"id":"test002","name":"Video Upscaling Test 001","url":"YOUR_GOOGLE_DRIVE_DIRECT_URL_2","date":"2025-06-07","tool":"Topaz"}'>Video Upscaling Test 001</option>
+            </select>
+        </div>
+        
+        <div class="info" id="test-info" style="display: none;">
+            <p><strong>Test ID:</strong> <span id="info-id">-</span></p>
+            <p><strong>Date:</strong> <span id="info-date">-</span></p>
+            <p><strong>Tool:</strong> <span id="info-tool">-</span></p>
+            <p><strong>Status:</strong> <span id="info-status">Ready</span></p>
+            <p class="quality-info">Tips: Use fullscreen for best quality. Press 'Q' for quality stats.</p>
+        </div>
+        
+        <div class="video-wrapper">
+            <video
+                id="vfx-video"
+                class="video-js vjs-default-skin vjs-big-play-centered vjs-16-9"
+                controls
+                preload="auto"
+                data-setup='{}'>
+                <p class="vjs-no-js">
+                    To view this video please enable JavaScript, and consider upgrading to a web browser that
+                    supports HTML5 video.
+                </p>
+            </video>
+        </div>
+        
+        <div class="controls" id="controls" style="display: none;">
+            <button onclick="player.playbackRate(0.25)">0.25x</button>
+            <button onclick="player.playbackRate(0.5)">0.5x</button>
+            <button onclick="player.playbackRate(1)">1x</button>
+            <button onclick="player.playbackRate(2)">2x</button>
+            <button onclick="toggleStats()">Toggle Stats</button>
+            <button onclick="captureFrame()">Capture Frame</button>
+            <button class="download-btn" onclick="downloadVideo()">Download Original</button>
+        </div>
+    </div>
+
+    <script src="https://vjs.zencdn.net/7.20.3/video.min.js"></script>
+    <script>
+        let player;
+        let currentTest = {};
+        
+        // Initialize player
+        player = videojs('vfx-video', {
+            controls: true,
+            fluid: true,
+            playbackRates: [0.25, 0.5, 1, 1.5, 2],
+            controlBar: {
+                pictureInPictureToggle: true,
+                volumePanel: {
+                    inline: false
+                }
+            }
+        });
+        
+        // Add keyboard shortcuts
+        player.ready(() => {
+            player.on('keydown', (e) => {
+                if (e.which === 81) { // Q key
+                    toggleStats();
+                }
+            });
+        });
+        
+        // Function to convert Google Drive URL to direct download URL
+        function getDirectUrl(driveUrl) {
+            // Extract file ID from various Google Drive URL formats
+            let fileId;
+            const patterns = [
+                /\/d\/([a-zA-Z0-9-_]+)/,
+                /id=([a-zA-Z0-9-_]+)/,
+                /\/file\/d\/([a-zA-Z0-9-_]+)/
+            ];
+            
+            for (let pattern of patterns) {
+                const match = driveUrl.match(pattern);
+                if (match) {
+                    fileId = match[1];
+                    break;
+                }
+            }
+            
+            if (fileId) {
+                return `https://drive.google.com/uc?export=download&id=${fileId}`;
+            }
+            return driveUrl; // Return original if not a Drive URL
+        }
+        
+        // Load test from URL parameters
+        function loadFromUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const testId = urlParams.get('id');
+            const testUrl = urlParams.get('url');
+            const testName = urlParams.get('name') || 'VFX Test';
+            
+            if (testUrl) {
+                const directUrl = getDirectUrl(testUrl);
+                loadVideo(directUrl, testName, testId);
+            }
+        }
+        
+        // Load selected test
+        function loadTest() {
+            const select = document.getElementById('test-select');
+            if (select.value) {
+                const testData = JSON.parse(select.value);
+                currentTest = testData;
+                const directUrl = getDirectUrl(testData.url);
+                
+                // Update info
+                document.getElementById('test-title').textContent = testData.name;
+                document.getElementById('info-id').textContent = testData.id;
+                document.getElementById('info-date').textContent = testData.date;
+                document.getElementById('info-tool').textContent = testData.tool;
+                document.getElementById('test-info').style.display = 'block';
+                document.getElementById('controls').style.display = 'flex';
+                
+                // Load video
+                player.src({
+                    type: 'video/mp4',
+                    src: directUrl
+                });
+            }
+        }
+        
+        // Load video function
+        function loadVideo(url, name, id) {
+            document.getElementById('test-title').textContent = name;
+            if (id) {
+                document.getElementById('info-id').textContent = id;
+            }
+            document.getElementById('test-info').style.display = 'block';
+            document.getElementById('controls').style.display = 'flex';
+            
+            player.src({
+                type: 'video/mp4',
+                src: url
+            });
+        }
+        
+        // Toggle quality statistics
+        let statsVisible = false;
+        function toggleStats() {
+            if (!statsVisible) {
+                player.qualityLevels();
+                // You can add more detailed stats here
+                player.overlay({
+                    content: 'Quality Stats Enabled',
+                    start: 'playing',
+                    end: 'playing+2'
+                });
+            }
+            statsVisible = !statsVisible;
+        }
+        
+        // Capture current frame
+        function captureFrame() {
+            const video = player.el().querySelector('video');
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0);
+            
+            // Download captured frame
+            canvas.toBlob((blob) => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `frame_${currentTest.id || 'capture'}_${Date.now()}.png`;
+                a.click();
+                URL.revokeObjectURL(url);
+            });
+        }
+        
+        // Download original video
+        function downloadVideo() {
+            if (player.currentSrc()) {
+                const a = document.createElement('a');
+                a.href = player.currentSrc();
+                a.download = currentTest.name || 'vfx_test.mp4';
+                a.click();
+            }
+        }
+        
+        // Check for URL parameters on load
+        window.addEventListener('load', loadFromUrl);
+    </script>
+</body>
+</html>
